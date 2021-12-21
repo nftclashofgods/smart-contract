@@ -1,50 +1,44 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.7;
 
-import "@openzeppelin/contracts/token/ERC20/presets/ERC20PresetMinterPauser.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./PancakeSwap/IPancakeFactory.sol";
 import "./PancakeSwap/IPancakeRouter02.sol";
 import "./BPContract.sol";
 
-contract AthenToken is ERC20PresetMinterPauser, Ownable {
+contract AthenToken is ERC20Burnable, Ownable {
     using SafeMath for uint256;
+	uint256 constant MAX_INT_TYPE = type(uint256).max;
     uint256 public maxSupply = 100 * 10**6 * 10**18;
 
-    uint256 public sellFeeRate = 5;	
-	uint256 public blacklistTime;
+    uint256 public sellFeeRate = 5;		
 	address public backupAddress;
 
 	address public PancakeSwapV2Pair;
 	IPancakeRouter02 public PancakeRouter;
 
 	BPContract public BotProtection;
-	bool public bpEnabled;	
+	bool public bpEnabled;
+	bool public BPDisabledForever = false;
 
-	mapping(address => bool) private feeFreeList;
-	mapping(address => bool) private blacklist;
+	mapping(address => bool) private feeFreeList;	
 
-    constructor() ERC20PresetMinterPauser ("Clash of Gods Token", "ATHEN") {
+    constructor() ERC20("Clash of Gods Token", "ATHEN") {
 		_mint(msg.sender, maxSupply);
-		blacklistTime = block.timestamp + 7 days;
-	}
-
-	modifier isValidTransfer(address sender, address receiver) {
-		require(!blacklist[sender] && !blacklist[receiver], "Blacklisted!");
-		_;
 	}
 
     function _transfer(
 		address sender,
 		address recipient,
 		uint256 amount
-	) internal isValidTransfer(sender, recipient) virtual override {		
+	) internal virtual override {		
 		uint256 transferFeeRate;
 
-		if (bpEnabled) {
-			BotProtection.protect(sender, recipient, amount);
-		}
+		if (bpEnabled && !BPDisabledForever){
+ 			BotProtection.protect(sender, recipient, amount);
+ 		}
 
 		if (!feeFreeList[sender] || !feeFreeList[recipient]) {
 			if (recipient == PancakeSwapV2Pair) { // receiver is pancakeSwapV2Pair mean this is a "sell" tx
@@ -69,15 +63,20 @@ contract AthenToken is ERC20PresetMinterPauser, Ownable {
 		PancakeRouter = pancakeRouter;
 	}
 
-	function setBotProtection(address botProtection) external onlyOwner {
-		require(address(BotProtection) == address(0), "Can only be initialized once");
-
-		BotProtection = BPContract(botProtection);
+	function setBPAddress(address _bp) external onlyOwner {
+ 		require(address(BotProtection) == address(0), "Can only be initialized once");
+ 		BotProtection = BPContract(_bp);
 	}
 
-	function toogleBotProtection(bool value) external onlyOwner {
-		bpEnabled = value;
+	function setBpEnabled(bool _enabled) external onlyOwner {
+ 		bpEnabled = _enabled;
 	}
+
+	function setBotProtectionDisableForever() external onlyOwner{
+ 		require(BPDisabledForever == false);
+ 		BPDisabledForever = true;
+	}
+
 
 	function setBackupAddress(address _backupAddress) external onlyOwner {
 		backupAddress = _backupAddress;	
@@ -101,44 +100,35 @@ contract AthenToken is ERC20PresetMinterPauser, Ownable {
 			emit UpdateWhiteList(targets[i], 0);
 		}
 	}
-
-	function addBlackListAddresses(address[] calldata targets) public onlyOwner {
-		require(block.timestamp <= blacklistTime, "BLACKLISTTIME: EXPIRED");
-		for (uint256 i = 0; i < targets.length; i++) {		
-			blacklist[targets[i]] = true;
-			emit UpdateBlackList(targets[i], 1);
-		}
-	}
-
-	function removeBlackListAddresses(address[] calldata targets) public onlyOwner {
-		for (uint256 i = 0; i < targets.length; i++) {
-			blacklist[targets[i]] = false;
-			emit UpdateBlackList(targets[i], 0);
-		}
-	}
-
-	function swapTokens(uint256 amount) external onlyOwner {
+	
+	function swapTokens(uint256 amount) external onlyOwner returns (bool succeed) {
 		require(amount < balanceOf(address(this)), "not enough balance");		
-		swapTokensForBNB(amount);
+		return swapTokensForBNB(amount);
 	}
 
-	function swapTokensForBNB(uint256 tokenAmount) private {
+	function swapTokensForBNB(uint256 tokenAmount) private returns (bool succeed) {
 		// generate the pancakeSwap pair
 		address[] memory path = new address[](2);
 		path[0] = address(this);
 		path[1] = PancakeRouter.WETH();
 
-		_approve(address(this), address(PancakeRouter), tokenAmount);		
-		PancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
+		if (allowance(address(this), address(PancakeRouter)) < tokenAmount) {
+			_approve(address(this), address(PancakeRouter), MAX_INT_TYPE);
+		}
+		try PancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
 			tokenAmount,
 			0, // accept any amount of BNB
 			path,
 			backupAddress,
 			block.timestamp
-		);
+		) {
+			return true;
+		}
+		catch Error(string memory /*reason*/) {
+			return false;
+		}
 	}
 
-	event UpdateWhiteList(address indexed target, uint8 isAdd);
-	event UpdateBlackList(address indexed target, uint8 isAdd);
+	event UpdateWhiteList(address indexed target, uint8 isAdd);	
 	event ChangeBackupAddress(address indexed target);
 }
