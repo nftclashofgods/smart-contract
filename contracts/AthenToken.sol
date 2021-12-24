@@ -25,8 +25,12 @@ contract AthenToken is ERC20Burnable, Ownable {
 
 	mapping(address => bool) private feeFreeList;	
 
-    constructor() ERC20("Clash of Gods Token", "ATHEN") {
+    constructor(address pancakeRouterAddress) ERC20("Clash of Gods Token", "ATHEN") {
 		_mint(msg.sender, maxSupply);
+
+		if (pancakeRouterAddress != address(0)) {
+			initializePancakeRouter(pancakeRouterAddress);
+		}
 	}
 
     function _transfer(
@@ -55,7 +59,7 @@ contract AthenToken is ERC20Burnable, Ownable {
 		super._transfer(sender, recipient, amount);
 	}
 
-	function initializePancakeRouter(address pancakeRouterAddress) external onlyOwner {
+	function initializePancakeRouter(address pancakeRouterAddress) private {
 		IPancakeRouter02 pancakeRouter = IPancakeRouter02(pancakeRouterAddress);
 		PancakeSwapV2Pair = IPancakeFactory(pancakeRouter.factory())
 								.createPair(address(this), pancakeRouter.WETH());
